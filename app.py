@@ -1,52 +1,71 @@
 import streamlit as st
 import os
-# ... (Import your existing AgentState, monitor_node, analyzer_node, repair_node, and workflow here)
+import random
+from typing import Annotated, TypedDict
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.tools import tool
+from langgraph.graph import StateGraph, END, START
 
-st.set_page_config(page_title="Autonomous SRE Dashboard", layout="wide")
-st.title("🤖 Autonomous Network SRE Agent")
-st.write("Real-time monitoring and self-healing automation powered by Gemini 2.0 Flash.")
+# --- 1. SETUP & SECRETS ---
+# Streamlit Cloud reads from the "Secrets" box you filled earlier
+api_key = st.secrets["GEMINI_API_KEY"]
 
-# Initialize Session State for logs
-if "agent_logs" not in st.session_state:
-    st.session_state.agent_logs = []
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash",
+    google_api_key=api_key
+)
 
-# --- Sidebar Configuration ---
-with st.sidebar:
-    st.header("Settings")
-    target_ip = st.text_input("Target Node IP", value="192.168.1.105")
-    if st.button("Clear Dashboard"):
-        st.session_state.agent_logs = []
+# --- 2. AGENT LOGIC (Nodes & Tools) ---
+class AgentState(TypedDict):
+    target_ip: str
+    status: str
+    attempts: int
+    history: list
 
-# --- Main Dashboard ---
-col1, col2 = st.columns([2, 1])
+@tool
+def ping_server(hostname: str):
+    """Checks if a server is reachable."""
+    return "Offline" if random.random() > 0.5 else "Online"
 
-with col1:
-    st.subheader("Activity Log")
-    log_container = st.container(height=400)
+def monitor_node(state: AgentState):
+    status = ping_server.invoke(state['target_ip'])
+    return {"status": status, "attempts": state['attempts'] + 1}
+
+def analyzer_node(state: AgentState):
+    prompt = f"The server {state['target_ip']} is {state['status']}. Should we restart?"
+    response = llm.invoke(prompt)
+    return {"history": state['history'] + [response.content]}
+
+# --- 3. GRAPH CONSTRUCTION ---
+# We define the workflow globally so the UI can always see it
+workflow = StateGraph(AgentState)
+workflow.add_node("monitor", monitor_node)
+workflow.add_node("analyzer", analyzer_node)
+workflow.set_entry_point("monitor")
+
+workflow.add_conditional_edges(
+    "monitor",
+    lambda x: "analyzer" if x["status"] == "Offline" and x["attempts"] < 3 else END
+)
+workflow.add_edge("analyzer", END)
+
+# Compile the app once and store it in session state to prevent NameErrors
+if "agent_app" not in st.session_state:
+    st.session_state.agent_app = workflow.compile()
+
+# --- 4. STREAMLIT UI ---
+st.title("🤖 Autonomous SRE Agent")
+
+target_ip = st.text_input("Target IP", "192.168.1.105")
+
+if st.button("Run Diagnostic"):
+    initial_state = {"target_ip": target_ip, "status": "Unknown", "attempts": 0, "history": []}
     
-    if st.button("🚀 Start Monitoring Run"):
-        # Setup initial state
-        initial_input = {"target_ip": target_ip, "status": "Unknown", "attempts": 0, "history": []}
-        
-        # Compile and Run
-        app = workflow.compile()
-        
-        for output in app.stream(initial_input):
-            for key, value in output.items():
-                log_entry = f"Step '{key}' finished. Status: {value.get('status', 'N/A')}"
-                st.session_state.agent_logs.append(log_entry)
-                log_container.write(log_entry)
-                
-                # If Gemini analyzed, show the reasoning
-                if "history" in value:
-                    st.session_state.agent_logs.append(f"🧠 Gemini: {value['history'][-1]}")
-                    log_container.info(value['history'][-1])
-
-with col2:
-    st.subheader("System Health")
-    # Display the most recent status in a big metric
-    if st.session_state.agent_logs:
-        last_status = "Healthy" if "Online" in str(st.session_state.agent_logs) else "Issue Detected"
-        st.metric(label="Network Status", value=last_status)
-    else:
-        st.metric(label="Network Status", value="Idle")
+    # Use the app from session state
+    for output in st.session_state.agent_app.stream(initial_input=initial_state):
+        for key, value in output.items():
+            st.write(f"**Step:** {key}")
+            if "status" in value:
+                st.write(f"Status detected: {value['status']}")
+            if "history" in value:
+                st.info(value['history'][-1])
