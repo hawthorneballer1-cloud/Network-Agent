@@ -36,7 +36,9 @@ def ping_server(hostname: str):
     return "Offline" if random.random() > 0.5 else "Online"
 
 def monitor_node(state: AgentState):
-    status = ping_server.invoke(state['target_ip'])
+    # Retrieve target_ip from the state
+    ip = state.get("target_ip", "127.0.0.1")
+    status = ping_server.invoke(ip)
     return {"status": status, "attempts": state['attempts'] + 1}
 
 def analyzer_node(state: AgentState):
@@ -92,5 +94,6 @@ if st.button("🚀 Run Diagnostic"):
                     with st.expander("View Gemini Reasoning"):
                         st.info(state_update['history'][-1])
         status.update(label="Diagnostic Complete!", state="complete")
+
 
 
