@@ -11,7 +11,7 @@ def analyzer_node(state: AgentState):
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash", 
+        model="gemini-2.5-flash", 
         google_api_key=api_key
     )
     
@@ -20,4 +20,5 @@ def analyzer_node(state: AgentState):
     # This call is now protected by the @retry decorator above
     response = llm.invoke(prompt)
     return {"history": state.get('history', []) + [response.content]}
+
 
